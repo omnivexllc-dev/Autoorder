@@ -14,6 +14,8 @@ import {
   RefreshCw,
   Loader2,
   PhoneOff,
+  UserPlus,
+  Upload,
 } from 'lucide-react';
 import { DashboardStats, Order } from '../types';
 
@@ -22,6 +24,7 @@ interface DashboardProps {
   orders: Order[];
   stats: DashboardStats;
   isCallingStarted: boolean;
+  isSimulatorMode?: boolean;
   onRefreshData: () => void;
   onStartCalling: () => void;
   onStopCalling: () => void;
@@ -32,6 +35,7 @@ export default function Dashboard({
   orders,
   stats,
   isCallingStarted,
+  isSimulatorMode = false,
   onRefreshData,
   onStartCalling,
   onStopCalling,
@@ -42,6 +46,18 @@ export default function Dashboard({
   const [uploadError, setUploadError] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Tab selection for the right panel (uploading list vs manually adding a single customer)
+  const [activeRightTab, setActiveRightTab] = useState<'upload' | 'manual'>('upload');
+
+  // Manual customer order states
+  const [manualName, setManualName] = useState('');
+  const [manualPhone, setManualPhone] = useState('');
+  const [manualProduct, setManualProduct] = useState('SaaS Pro Subscription');
+  const [manualPrice, setManualPrice] = useState('149');
+  const [manualSuccess, setManualSuccess] = useState('');
+  const [manualError, setManualError] = useState('');
+  const [addingManual, setAddingManual] = useState(false);
 
   // Compute calling progress stats
   const totalProcessed = stats.confirmed + stats.cancelled + stats.noAnswer + stats.failed;
@@ -143,6 +159,75 @@ export default function Dashboard({
     }
   };
 
+  const handleResetCampaign = async () => {
+    if (!window.confirm('Do you want to reset all completed/cancelled orders back to "Pending" and set call attempts back to 0 so you can re-run the campaign?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/orders/reset', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        onRefreshData();
+      }
+    } catch (err) {
+      console.error('Failed to reset campaign:', err);
+    }
+  };
+
+  const handleManualSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualName.trim() || !manualPhone.trim()) {
+      setManualError('Customer Name and Phone Number are required.');
+      return;
+    }
+
+    setAddingManual(true);
+    setManualError('');
+    setManualSuccess('');
+
+    // Generate a randomized unique order reference
+    const randomOrderNum = 'TX' + Math.floor(100000 + Math.random() * 900000);
+
+    try {
+      const response = await fetch('/api/orders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          customer_name: manualName.trim(),
+          phone_number: manualPhone.trim(),
+          order_number: randomOrderNum,
+          product_name: manualProduct.trim(),
+          price: manualPrice.trim(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setManualSuccess('Customer successfully added to calling queue as Pending!');
+        setManualName('');
+        setManualPhone('');
+        onRefreshData();
+        setTimeout(() => setManualSuccess(''), 5000);
+      } else {
+        setManualError(data.error || 'Failed to add customer.');
+      }
+    } catch (err) {
+      setManualError('Network error adding customer.');
+    } finally {
+      setAddingManual(false);
+    }
+  };
+
   return (
     <div id="dashboard-view" className="space-y-8 animate-fade-in">
       {/* Top Banner and System Status */}
@@ -156,6 +241,12 @@ export default function Dashboard({
 
         {/* Live Indicator Panel */}
         <div className="flex items-center gap-3">
+          {isCallingStarted && isSimulatorMode && (
+            <div className="px-3 py-1.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold flex items-center gap-1.5 animate-pulse">
+              <span className="h-2 w-2 rounded-full bg-amber-500" />
+              SIMULATOR ACTIVE
+            </div>
+          )}
           <div className={`px-4 py-2 rounded-xl border flex items-center gap-2 text-sm font-semibold transition-all ${
             isCallingStarted
               ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -174,6 +265,41 @@ export default function Dashboard({
           </button>
         </div>
       </div>
+
+      {/* Simulator Mode Informational Alert */}
+      {!isCallingStarted && !isSimulatorMode && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="h-5.5 w-5.5 text-blue-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <span className="font-bold block text-blue-900">Sandbox Simulation Mode Active</span>
+              <span className="text-xs text-blue-700 block mt-0.5">
+                Because Twilio API credentials are not configured in settings, starting the campaign will run in <strong>outbound simulation sandbox</strong>. Virtual customers will answer, press keys, and update confirmation statuses automatically in real-time!
+              </span>
+              <span className="text-xs text-slate-600 block mt-2 bg-white/60 p-2 rounded-lg border border-blue-100">
+                🚀 <strong>Want real phone calls?</strong> Go to the <strong>Settings</strong> tab, configure your <strong>Twilio Account SID, Auth Token, and Twilio Phone Number</strong>. Then, use the <strong>Quick Add</strong> form below to add a pending order with your mobile phone number, and click <strong>Start Calling Campaign</strong> to receive a real call!
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isCallingStarted && isSimulatorMode && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="h-5.5 w-5.5 text-amber-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <span className="font-bold block text-amber-900">Virtual Call Simulator Running</span>
+              <span className="text-xs text-amber-700 block mt-0.5">
+                The campaign is running in virtual demo mode. Outbound calls are being simulated sequentially in the background. Watch the orders below update as virtual customers answer our calls and press IVR keys!
+              </span>
+              <span className="text-xs text-slate-700 block mt-2 bg-white/60 p-2 rounded-lg border border-amber-100">
+                💡 Note: To place actual calls, pause the campaign, save valid Twilio keys in <strong>Settings</strong>, ensure you have <strong>Pending</strong> orders, and start the campaign.
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Analytics Widgets (Bento Stats) */}
       <div id="stats-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -293,6 +419,18 @@ export default function Dashboard({
             </div>
           </div>
 
+          {stats.pending === 0 && stats.totalOrders > 0 && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3.5 text-xs flex items-start gap-2.5 shadow-sm">
+              <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <span className="font-bold block text-amber-900">Campaign Queue Finished (0 Pending)</span>
+                <span className="text-amber-700 block mt-0.5">
+                  All customer records in the current list have been called and finalized. To restart and dial again, click the <strong>Reset Campaign Progress</strong> button below or add a new customer on the right.
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* System Control buttons */}
           <div className="flex flex-wrap items-center gap-3 pt-3">
             {!isCallingStarted ? (
@@ -315,6 +453,16 @@ export default function Dashboard({
             )}
 
             <button
+              onClick={handleResetCampaign}
+              disabled={stats.totalOrders === 0 || isCallingStarted}
+              className="px-5 py-3 bg-white hover:bg-blue-50 border border-slate-200 text-slate-600 hover:text-blue-700 hover:border-blue-200 font-semibold rounded-xl flex items-center gap-2 transition-all disabled:opacity-40 cursor-pointer text-sm"
+              title="Reset all completed calls back to Pending status"
+            >
+              <RefreshCw className="h-4.5 w-4.5" />
+              Reset Campaign Progress
+            </button>
+
+            <button
               onClick={handleClearAll}
               disabled={stats.totalOrders === 0}
               className="px-5 py-3 bg-slate-50 hover:bg-red-50 hover:text-red-700 border border-slate-200 text-slate-600 hover:border-red-200 font-semibold rounded-xl flex items-center gap-2 transition-all disabled:opacity-40 cursor-pointer text-sm"
@@ -325,83 +473,201 @@ export default function Dashboard({
           </div>
         </div>
 
-        {/* Right Side: Upload and File drop area */}
+        {/* Right Side: Tabbed Interface for Upload or Quick Manual Add */}
         <div className="border-t lg:border-t-0 lg:border-l border-slate-200 pt-6 lg:pt-0 lg:pl-6 space-y-4">
-          <div>
-            <h3 className="text-sm font-bold text-slate-800">Import Customer Campaign List</h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Upload a `.xlsx` Excel sheet or `.csv` with customer details.
-            </p>
-          </div>
-
-          <form onSubmit={handleUploadSubmit} className="space-y-3">
-            <div
-              onDragEnter={handleDrag}
-              onDragOver={handleDrag}
-              onDragLeave={handleDrag}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all flex flex-col items-center justify-center space-y-2 ${
-                dragActive
-                  ? 'border-blue-500 bg-blue-50/50'
-                  : 'border-slate-300 bg-slate-50 hover:border-slate-400'
+          {/* Tab Headers */}
+          <div className="flex border-b border-slate-200">
+            <button
+              onClick={() => setActiveRightTab('upload')}
+              className={`flex-1 pb-2.5 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 border-b-2 cursor-pointer transition-all ${
+                activeRightTab === 'upload'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-slate-400 hover:text-slate-600'
               }`}
             >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.csv"
-                onChange={handleFileChange}
-                className="hidden"
-              />
-              <FileSpreadsheet className={`h-8 w-8 ${file ? 'text-blue-600' : 'text-slate-400'}`} />
-              <div className="text-xs">
-                {file ? (
-                  <span className="text-blue-700 font-semibold font-mono block truncate max-w-[200px]">
-                    {file.name}
-                  </span>
-                ) : (
-                  <>
-                    <span className="text-blue-600 font-bold block">Click to upload</span>
-                    <span className="text-slate-400 mt-1 block text-[11px]">or drag & drop spreadsheet</span>
-                  </>
+              <Upload className="h-3.5 w-3.5" />
+              Upload List
+            </button>
+            <button
+              onClick={() => setActiveRightTab('manual')}
+              className={`flex-1 pb-2.5 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 border-b-2 cursor-pointer transition-all ${
+                activeRightTab === 'manual'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              Quick Add
+            </button>
+          </div>
+
+          {activeRightTab === 'upload' ? (
+            <div className="space-y-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">Import Customer Campaign List</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Upload a `.xlsx` Excel sheet or `.csv` with customer details.
+                </p>
+              </div>
+
+              <form onSubmit={handleUploadSubmit} className="space-y-3">
+                <div
+                  onDragEnter={handleDrag}
+                  onDragOver={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDrop={handleDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all flex flex-col items-center justify-center space-y-2 ${
+                    dragActive
+                      ? 'border-blue-500 bg-blue-50/50'
+                      : 'border-slate-300 bg-slate-50 hover:border-slate-400'
+                  }`}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.csv"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  <FileSpreadsheet className={`h-8 w-8 ${file ? 'text-blue-600' : 'text-slate-400'}`} />
+                  <div className="text-xs">
+                    {file ? (
+                      <span className="text-blue-700 font-semibold font-mono block truncate max-w-[200px]">
+                        {file.name}
+                      </span>
+                    ) : (
+                      <>
+                        <span className="text-blue-600 font-bold block">Click to upload</span>
+                        <span className="text-slate-400 mt-1 block text-[11px]">or drag & drop spreadsheet</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {uploadSuccess && (
+                  <div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3 font-semibold">
+                    {uploadSuccess}
+                  </div>
                 )}
+
+                {uploadError && (
+                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
+                    {uploadError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={!file || uploading}
+                  className="w-full py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-medium rounded-lg text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                >
+                  {uploading ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Importing Spreadsheet...
+                    </>
+                  ) : (
+                    'Process Campaign File'
+                  )}
+                </button>
+              </form>
+
+              {/* Quick tips about format requirements */}
+              <div className="text-[10px] text-slate-500 bg-slate-50 border border-slate-200 p-2.5 rounded-lg">
+                <span className="font-bold block text-slate-700 mb-0.5 uppercase tracking-wide">Excel Header Requirements:</span>
+                `Customer Name`, `Phone Number`, `Order Number`, `Product Name`, `price`
               </div>
             </div>
-
-            {uploadSuccess && (
-              <div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-                {uploadSuccess}
+          ) : (
+            <div className="space-y-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">Add Test Customer to Queue</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Directly queue a customer to test Twilio calling flows in real-time.
+                </p>
               </div>
-            )}
 
-            {uploadError && (
-              <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
-                {uploadError}
-              </div>
-            )}
+              <form onSubmit={handleManualSubmit} className="space-y-3 text-left">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Customer Name</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Jane Doe"
+                    value={manualName}
+                    onChange={(e) => setManualName(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
+                  />
+                </div>
 
-            <button
-              type="submit"
-              disabled={!file || uploading}
-              className="w-full py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-medium rounded-lg text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-sm"
-            >
-              {uploading ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Importing Spreadsheet...
-                </>
-              ) : (
-                'Process Campaign File'
-              )}
-            </button>
-          </form>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Phone Number (to Dial)</label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="e.g. +14155552671"
+                    value={manualPhone}
+                    onChange={(e) => setManualPhone(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none font-mono"
+                  />
+                  <span className="text-[10px] text-slate-400 block leading-tight">
+                    Enter your mobile number to receive actual voice calls from Twilio.
+                  </span>
+                </div>
 
-          {/* Quick tips about format requirements */}
-          <div className="text-[10px] text-slate-500 bg-slate-50 border border-slate-200 p-2.5 rounded-lg">
-            <span className="font-bold block text-slate-700 mb-0.5 uppercase tracking-wide">Excel Header Requirements:</span>
-            `Customer Name`, `Phone Number`, `Order Number`, `Product Name`, `price`
-          </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Product</label>
+                    <input
+                      type="text"
+                      placeholder="Product Name"
+                      value={manualProduct}
+                      onChange={(e) => setManualProduct(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Price ($)</label>
+                    <input
+                      type="number"
+                      placeholder="99"
+                      value={manualPrice}
+                      onChange={(e) => setManualPrice(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none font-mono"
+                    />
+                  </div>
+                </div>
+
+                {manualSuccess && (
+                  <div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3 font-semibold">
+                    {manualSuccess}
+                  </div>
+                )}
+
+                {manualError && (
+                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
+                    {manualError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={addingManual}
+                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-semibold rounded-lg text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-sm mt-2"
+                >
+                  {addingManual ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Queuing customer...
+                    </>
+                  ) : (
+                    'Add Customer to Queue'
+                  )}
+                </button>
+              </form>
+            </div>
+          )}
         </div>
       </div>
     </div>

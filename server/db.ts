@@ -234,3 +234,15 @@ export async function clearAllOrders(): Promise<void> {
   dbData.orders = [];
   await saveToDisk();
 }
+
+export async function resetAllOrders(): Promise<void> {
+  for (const order of dbData.orders) {
+    order.status = 'Pending';
+    order.attempts = 0;
+    order.call_sid = null;
+    order.call_duration = null;
+    order.called_at = null;
+    order.completed_at = null;
+  }
+  await saveToDisk();
+}

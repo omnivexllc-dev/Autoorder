@@ -20,6 +20,7 @@ import {
   updateOrderCallDetailsBySid,
   clearAllOrders,
   getSetting,
+  resetAllOrders,
 } from './server/db.js';
 
 import { makeCall } from './server/twilio.js';
@@ -36,6 +37,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // Global server variables
 let isCallingStarted = false;
+let isSimulatorMode = false;
 let activeCalls = 0;
 const MAX_CONCURRENT_CALLS = 1; // 1 concurrent call safe limit for typical Twilio trials/rates
 let serverAppUrl = process.env.APP_URL || '';
@@ -203,10 +205,42 @@ app.post('/api/orders/clear', authenticateToken, async (req, res) => {
   }
 });
 
+app.post('/api/orders', authenticateToken, async (req, res) => {
+  try {
+    const { customer_name, phone_number, order_number, product_name, price } = req.body;
+    if (!customer_name || !phone_number || !order_number) {
+      return res.status(400).json({ error: 'Customer name, phone number, and order number are required.' });
+    }
+
+    const newId = await addOrder({
+      customer_name: customer_name.trim(),
+      phone_number: phone_number.trim(),
+      order_number: order_number.trim(),
+      product_name: (product_name || 'N/A').trim(),
+      price: (price || '0').trim(),
+    });
+
+    res.json({ success: true, id: newId, message: 'Order added successfully to calling queue.' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orders/reset', authenticateToken, async (req, res) => {
+  try {
+    await resetAllOrders();
+    // Also stop active calling since we reset
+    isCallingStarted = false;
+    res.json({ success: true, message: 'All orders have been reset to Pending status.' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==================== CALLING SERVICE CONTROLS ====================
 
 app.get('/api/calling/status', authenticateToken, async (req, res) => {
-  res.json({ isCallingStarted });
+  res.json({ isCallingStarted, isSimulatorMode });
 });
 
 app.post('/api/calling/start', authenticateToken, async (req, res) => {
@@ -222,12 +256,26 @@ app.post('/api/calling/start', authenticateToken, async (req, res) => {
     const phone = await getSetting('twilio_phone_number');
 
     if (!sid || !token || !phone) {
-      return res.status(400).json({ error: 'Twilio is not fully configured in settings.' });
+      isSimulatorMode = true;
+      isCallingStarted = true;
+      console.log(`[Worker] Twilio not configured. Auto-started campaign in SIMULATOR Mode.`);
+      return res.json({
+        success: true,
+        isCallingStarted,
+        isSimulatorMode,
+        message: 'Sandbox Simulation Mode active (No Twilio credentials configured).'
+      });
     }
 
+    isSimulatorMode = false;
     isCallingStarted = true;
-    console.log(`[Worker] Calling service started. App URL: ${serverAppUrl}`);
-    res.json({ success: true, isCallingStarted, message: 'Auto-calling service started.' });
+    console.log(`[Worker] Calling service started in LIVE Twilio mode. App URL: ${serverAppUrl}`);
+    res.json({
+      success: true,
+      isCallingStarted,
+      isSimulatorMode,
+      message: 'Auto-calling service started in LIVE Twilio mode.'
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -236,7 +284,7 @@ app.post('/api/calling/start', authenticateToken, async (req, res) => {
 app.post('/api/calling/stop', authenticateToken, async (req, res) => {
   isCallingStarted = false;
   console.log('[Worker] Calling service stopped manually.');
-  res.json({ success: true, isCallingStarted, message: 'Auto-calling service stopped.' });
+  res.json({ success: true, isCallingStarted, isSimulatorMode, message: 'Auto-calling service stopped.' });
 });
 
 // ==================== DASHBOARD STATS ====================
@@ -438,16 +486,65 @@ async function processCallingQueue() {
 
       console.log(`[Worker] Outbound call to ${nextOrder.customer_name} (${nextOrder.phone_number}), attempt ${nextAttempts}`);
 
-      const callSid = await makeCall({
-        orderId: nextOrder.id,
-        customerName: nextOrder.customer_name,
-        phoneNumber: nextOrder.phone_number,
-        appUrl: serverAppUrl,
-      });
+      if (isSimulatorMode) {
+        // Run sandbox virtual call simulation
+        const callSid = `mock_call_${Math.random().toString(36).substring(2, 10)}`;
+        await updateOrderCallDetails(nextOrder.id, {
+          call_sid: callSid,
+        });
 
-      await updateOrderCallDetails(nextOrder.id, {
-        call_sid: callSid,
-      });
+        console.log(`[Worker] [Simulator] Outbound call SID allocated: ${callSid}`);
+
+        // Set a brief delay to simulate customer answering and pressing key
+        setTimeout(async () => {
+          try {
+            // Verify calling is still active
+            if (!isCallingStarted) return;
+
+            const order = await getOrderById(nextOrder.id);
+            if (!order || order.status !== 'Calling') return;
+
+            const rand = Math.random();
+            let finalStatus = 'Confirmed';
+            let duration = Math.floor(Math.random() * 25) + 15; // 15-40 seconds call
+
+            if (rand < 0.65) {
+              finalStatus = 'Confirmed';
+            } else if (rand < 0.82) {
+              finalStatus = 'Cancelled';
+              duration = Math.floor(Math.random() * 30) + 20;
+            } else if (rand < 0.93) {
+              finalStatus = nextAttempts < 3 ? 'Pending' : 'No Answer';
+              duration = 0;
+            } else {
+              finalStatus = nextAttempts < 3 ? 'Pending' : 'Failed';
+              duration = 0;
+            }
+
+            console.log(`[Worker] [Simulator] Customer ${order.customer_name} answered. Keypress results: ${finalStatus}`);
+
+            await updateOrderCallDetails(nextOrder.id, {
+              status: finalStatus,
+              call_duration: finalStatus === 'Pending' ? null : duration,
+              completed_at: new Date().toISOString(),
+            });
+          } catch (simErr: any) {
+            console.error('[Worker] [Simulator] Callback error:', simErr.message);
+          }
+        }, 5000); // 5 seconds of speaking simulation
+      } else {
+        // Live mode: Twilio API
+        const callSid = await makeCall({
+          orderId: nextOrder.id,
+          customerName: nextOrder.customer_name,
+          phoneNumber: nextOrder.phone_number,
+          appUrl: serverAppUrl,
+        });
+
+        await updateOrderCallDetails(nextOrder.id, {
+          call_sid: callSid,
+        });
+      }
     } catch (callErr: any) {
       console.error(`[Worker] Error dialing order ID ${nextOrder.id}:`, callErr.message);
 

@@ -24,6 +24,7 @@ export default function App() {
     averageDuration: 0,
   });
   const [isCallingStarted, setIsCallingStarted] = useState(false);
+  const [isSimulatorMode, setIsSimulatorMode] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // Read session token from localStorage on boot
@@ -56,6 +57,7 @@ export default function App() {
         setOrders(ordersData);
         setStats(statsData);
         setIsCallingStarted(statusData.isCallingStarted);
+        setIsSimulatorMode(statusData.isSimulatorMode || false);
       } else if (ordersRes.status === 401 || ordersRes.status === 403) {
         // Token has expired or invalid
         handleLogout();
@@ -203,6 +205,7 @@ export default function App() {
               orders={orders}
               stats={stats}
               isCallingStarted={isCallingStarted}
+              isSimulatorMode={isSimulatorMode}
               onRefreshData={fetchCampaignData}
               onStartCalling={handleStartCalling}
               onStopCalling={handleStopCalling}

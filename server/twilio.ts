@@ -13,6 +13,29 @@ export async function getTwilioClient() {
   return twilio(accountSid, authToken);
 }
 
+// Helper to format any input phone number into E.164 format for Twilio
+function formatE164(phone: string): string {
+  // Strip all non-digit characters except maybe a leading plus
+  let cleaned = phone.trim().replace(/[^\d+]/g, '');
+  
+  if (cleaned.startsWith('+')) {
+    return cleaned;
+  }
+  
+  // If it's 10 digits, assume US/Canada (+1)
+  if (cleaned.length === 10) {
+    return `+1${cleaned}`;
+  }
+  
+  // If it's 11 digits and starts with 1, assume US/Canada and prefix with +
+  if (cleaned.length === 11 && cleaned.startsWith('1')) {
+    return `+${cleaned}`;
+  }
+  
+  // Otherwise, default to prepending +
+  return `+${cleaned}`;
+}
+
 // Helper to initiate an outbound call
 export async function makeCall(params: {
   orderId: number;
@@ -22,25 +45,27 @@ export async function makeCall(params: {
 }) {
   const { orderId, phoneNumber, appUrl } = params;
   const client = await getTwilioClient();
-  const fromNumber = await getSetting('twilio_phone_number');
+  const rawFromNumber = await getSetting('twilio_phone_number');
 
-  if (!fromNumber) {
+  if (!rawFromNumber) {
     throw new Error('Twilio phone number is not configured in settings.');
   }
+
+  const formattedTo = formatE164(phoneNumber);
+  const formattedFrom = formatE164(rawFromNumber);
 
   // Ensure appUrl has no trailing slash
   const baseUrl = appUrl.endsWith('/') ? appUrl.slice(0, -1) : appUrl;
 
-  console.log(`[Twilio] Initiating call to order ID ${orderId} (${phoneNumber}) from ${fromNumber}`);
+  console.log(`[Twilio] Initiating call to order ID ${orderId} (${formattedTo}) from ${formattedFrom}`);
 
   const call = await client.calls.create({
     url: `${baseUrl}/api/twilio/twiml/${orderId}`,
-    to: phoneNumber,
-    from: fromNumber,
+    to: formattedTo,
+    from: formattedFrom,
     statusCallback: `${baseUrl}/api/twilio/status-callback/${orderId}`,
     statusCallbackEvent: ['completed', 'busy', 'no-answer', 'failed'],
     statusCallbackMethod: 'POST',
-    // We can also gather input
   });
 
   return call.sid;
