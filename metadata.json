@@ -1,0 +1,6 @@
+{
+  "name": "OrderConfirm AI",
+  "description": "Automatically call customers to confirm orders using Twilio Voice API, preview uploads, and track call results on an interactive dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
